@@ -1,0 +1,47 @@
+name: DNS Validation & Sync
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - "domains/**"
+      - "scripts/dns.js"
+      - ".github/workflows/dns.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: dns-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dns:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate Pull Request
+        if: github.event_name == 'pull_request'
+        env:
+          PR_AUTHOR: ${{ github.actor }}
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: |
+          CHANGED_FILES=$(git diff --name-only --no-renames "origin/${BASE_BRANCH}...HEAD")
+          export CHANGED_FILES
+          node scripts/dns.js --check
+
+      - name: Sync DNS to Cloudflare
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+        run: node scripts/dns.js --sync
