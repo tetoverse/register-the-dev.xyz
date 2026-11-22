@@ -1,0 +1,9 @@
+{
+  "owner": {
+    "username": "tetoverse",
+    "email": "contact@the-dev.xyz"
+  },
+  "records": {
+    "CNAME": "cname.vercel-dns.com"
+  }
+}
