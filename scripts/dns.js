@@ -10,7 +10,7 @@ const RESERVED = new Set([
   "www", "api", "admin", "mail", "ns1", "ns2", "status",
   "docs", "support", "cdn", "root", "ftp", "smtp", "imap", "pop"
 ]);
-const ALLOWED_TYPES = new Set(["A", "AAAA", "CNAME", "TXT", "NS"]);
+const ALLOWED_TYPES = new Set(["A", "AAAA", "CNAME", "TXT"]);
 const COMMENT_TAG = "managed-by-gh";
 
 const mode = process.argv[2]; // "--check" or "--sync"
