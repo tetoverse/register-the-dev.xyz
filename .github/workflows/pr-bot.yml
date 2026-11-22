@@ -1,0 +1,164 @@
+name: PR Review Bot
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: read
+
+jobs:
+  review-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run PR Review & Labeling Bot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const issue_number = pr.number;
+            const action = context.payload.action;
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name,
+                  color,
+                  description
+                });
+              } catch (e) {}
+            }
+
+            async function setLabel(name, shouldHave, color, description) {
+              if (shouldHave) {
+                await ensureLabel(name, color, description);
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number,
+                  labels: [name]
+                });
+              } else {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner,
+                    repo,
+                    issue_number,
+                    name
+                  });
+                } catch (e) {}
+              }
+            }
+
+            if (action === "opened") {
+              const welcomeBody = [
+                "<!-- the-dev-welcome-bot -->",
+                "### Hi there! 👋",
+                "",
+                "Thanks for opening a pull request for **`the-dev.xyz`**. While waiting for a maintainer to review your request, please check a few quick things:",
+                "",
+                "1. **Check the automated tests:** Look at the checks at the bottom of this PR. If **DNS Validation & Sync** fails, click **Details** to see what needs to be fixed.",
+                "2. **Verify your JSON file:** Make sure your file is inside the `domains/` folder, uses lowercase letters only, and has valid JSON syntax.",
+                "3. **Fill out the PR template:** Add a live, working preview link to your website. Blank or under-construction sites will not be approved.",
+                "4. **Wait patiently:** Reviews are done manually and usually take from a few hours up to 2 days.",
+                "",
+                "> **Note:** Please avoid pinging or messaging maintainers directly—all pull requests are reviewed in order."
+              ].join("\n");
+
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: welcomeBody
+              });
+            }
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner,
+              repo,
+              pull_number: issue_number
+            });
+
+            let hasInvalidFile = false;
+            let invalidReasons = [];
+            let hasNSRequest = false;
+            const detectedTypes = new Set();
+
+            for (const file of files) {
+              if (!file.filename.startsWith("domains/") || !file.filename.endsWith(".json")) {
+                hasInvalidFile = true;
+                invalidReasons.push(`\`${file.filename}\` is outside \`domains/\` or not a \`.json\` file.`);
+                continue;
+              }
+
+              if (file.status === "removed") continue;
+
+              try {
+                const { data: contentData } = await github.rest.repos.getContent({
+                  owner,
+                  repo,
+                  path: file.filename,
+                  ref: pr.head.sha
+                });
+
+                const rawText = Buffer.from(contentData.content, "base64").toString("utf8");
+                const parsed = JSON.parse(rawText);
+
+                if (!parsed.records || typeof parsed.records !== "object") {
+                  hasInvalidFile = true;
+                  invalidReasons.push(`\`${file.filename}\` is missing a valid \`records\` object.`);
+                  continue;
+                }
+
+                for (const key of Object.keys(parsed.records)) {
+                  const upper = key.toUpperCase();
+                  detectedTypes.add(upper);
+                  if (upper === "NS") {
+                    hasNSRequest = true;
+                  }
+                }
+              } catch (err) {
+                hasInvalidFile = true;
+                invalidReasons.push(`\`${file.filename}\` contains invalid JSON syntax.`);
+              }
+            }
+
+            await setLabel("reason: invalid file", hasInvalidFile, "d93f0b", "JSON syntax or file path error");
+            await setLabel("ns-request", hasNSRequest, "fbca04", "Pull request includes NS records");
+
+            for (const type of ["A", "AAAA", "CNAME", "TXT"]) {
+              await setLabel(
+                `record: ${type}`,
+                detectedTypes.has(type),
+                "0e8a16",
+                `Subdomain uses ${type} record`
+              );
+            }
+
+            const noticeMarker = "<!-- the-dev-notice-bot -->";
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number
+            });
+            const existingNotice = comments.find((c) => c.body && c.body.includes(noticeMarker));
+
+            let noticeSections = [];
+
+            if (hasNSRequest) {
+              noticeSections.push(
+                "> **Nameserver (`NS`) request:** Please make sure you've included all necessary details and explained your use case in the pull request description, and wait for a maintainer to review your request."
+              );
+            }
+
+            if (hasInvalidFile) {
+              noticeSections.push([
+                "> **Invalid file detected:**",
+                ...invalidReasons.map((r) => `> - ${r}`) ].join("\n")); }  if (noticeSections.length > 0) { const noticeBody = `${noticeMarker}\n${noticeSections.join("\n\n")}`; if (existingNotice) { await github.rest.issues.updateComment({ owner, repo, comment_id: existingNotice.id, body: noticeBody }); } else { await github.rest.issues.createComment({ owner, repo, issue_number, body: noticeBody }); } } else if (existingNotice) { await github.rest.issues.updateComment({ owner, repo, comment_id: existingNotice.id, body: `${noticeMarker}\n> **Resolved:** All file issues have been fixed. Your pull request is now ready for maintainer review.`
+              });
+            }
